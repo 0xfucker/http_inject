@@ -202,13 +202,49 @@ void packet_handler(u_char *param, const struct pcap_pkthdr *header, const u_cha
             oldData[oldStringManager->getRawStreamLength()]=0;
             if(strstr((char*)oldData,"GET") && filteringSite(strstr((char*)oldData,"GET")))
             {
-                char responce[]="HTTP/1.1 302 Found\nLocation: http://www.daum.net/";
+
+                char request[]="Blocked\r\n\r\n";
+                newStringManager=new StringManager((u_int8_t*)request,sizeof(request));
+                {
+                    oldTCPManager->getDestinationAddress(dAddr,16);
+                    oldTCPManager->getSourceAddress(sAddr,16);
+                    newTCPManager =new TCPManager(ntohs(*(u_int16_t*)sAddr),ntohs(*(u_int16_t*)dAddr),
+                                                  oldTCPManager->getSeqNumber()+oldStringManager->getRawStreamLength(),oldTCPManager->getAckNumber(),
+                                                  TH_ACK|TH_FIN,newStringManager);
+                    {
+                        oldIPManager->getDestinationAddress(dAddr,16);
+                        oldIPManager->getSourceAddress(sAddr,16);
+                        newIPManager=new IPManager(4,sAddr,dAddr,newTCPManager);
+                        newIPManager->setID(oldIPManager->getID());
+                        {
+                            oldRoot->getDestinationAddress(dAddr,16);
+                            oldRoot->getSourceAddress(sAddr,16);
+                            newRoot=new EthernetManager(sAddr,dAddr,newIPManager);
+
+                            newRoot->getRawStream(newData,1700);
+
+                            printf("ip ID : %d",ntohs(newIPManager->getID()));
+                            if(pcap_sendpacket(adhandle,newData,newRoot->getRawStreamLength()))
+                            {
+                                fprintf(stderr,"target to gate error\n");
+                            }
+                            delete newRoot;
+                        }
+                        delete newIPManager;
+                    }
+                    delete newTCPManager;
+                }
+                delete newStringManager;
+
+                char responce[]=
+                        //"HTTP/1.1 200 OK\r\nContent-type: text/html\r\nBlocked\r\n\r\n";
+                        "HTTP/1.1 302 Found\r\nLocation: http://www.daum.net/\r\n\r\n";
                 newStringManager=new StringManager((u_int8_t*)responce,sizeof(responce));
                 {
                     oldTCPManager->getDestinationAddress(dAddr,16);
                     oldTCPManager->getSourceAddress(sAddr,16);
                     newTCPManager =new TCPManager(ntohs(*(u_int16_t*)dAddr),ntohs(*(u_int16_t*)sAddr),
-                                                  oldTCPManager->getAckNumber(),oldTCPManager->getSeqNumber(),
+                                                  oldTCPManager->getAckNumber(),oldTCPManager->getSeqNumber()+oldStringManager->getRawStreamLength(),
                                                   TH_ACK|TH_FIN,newStringManager);
                     printf("oldTCP\nACK: %u\nSEQ: %u\n",(oldTCPManager->getAckNumber()),(oldTCPManager->getSeqNumber()));
                     printf("newTCP\nACK: %u\nSEQ: %u\n",(newTCPManager->getAckNumber()),(newTCPManager->getSeqNumber()));
@@ -216,7 +252,7 @@ void packet_handler(u_char *param, const struct pcap_pkthdr *header, const u_cha
                         oldIPManager->getDestinationAddress(dAddr,16);
                         oldIPManager->getSourceAddress(sAddr,16);
                         newIPManager=new IPManager(4,dAddr,sAddr,newTCPManager);
-                        newIPManager->setID(rand());
+                        newIPManager->setID(oldIPManager->getID());
                         {
                             oldRoot->getDestinationAddress(dAddr,16);
                             oldRoot->getSourceAddress(sAddr,16);
@@ -236,6 +272,7 @@ void packet_handler(u_char *param, const struct pcap_pkthdr *header, const u_cha
                     delete newTCPManager;
                 }
                 delete newStringManager;
+
             }
         }
     }
