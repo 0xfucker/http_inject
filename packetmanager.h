@@ -1,6 +1,8 @@
 #ifndef PACKETMANAGER_H
 #define PACKETMANAGER_H
 
+#define LIBNET_LIL_ENDIAN 1
+
 #ifdef WIN32
 #include<WinSock2.h>
 #include"libnet/in_systm.h"
@@ -428,7 +430,6 @@ private:
     libnet_tcp_hdr tcpHeader;
     u_int8_t* tcpOption[32];
     u_int8_t optionCount;
-    u_int8_t headerSize;
     libnet_ipv4_hdr ipv4Header;
 
     void setCheckSum()
@@ -465,7 +466,6 @@ public:
     TCPManager(TCPManager* origin)
     {
         this->tcpHeader=origin->tcpHeader;
-        this->headerSize=origin->headerSize;
         this->optionCount=origin->optionCount;
         for(int i=0;i<this->optionCount;i++)
         {
@@ -494,14 +494,13 @@ public:
         }
         tcpHeader=*(libnet_tcp_hdr*)protocolStream;
 
-        headerSize=(*(protocolStream+12)&0xF0)/4;
-        if(size<headerSize)
+        if(size<tcpHeader.th_off*4)
         {
             fprintf(stderr,"TCP size error\n");
             return;
         }
         optionCount=0;
-        for(int i=sizeof(tcpHeader);i<headerSize;)
+        for(int i=sizeof(tcpHeader);i<tcpHeader.th_off*4;)
         {
             switch(protocolStream[i])
             {
@@ -519,7 +518,7 @@ public:
                 break;
             }
         }
-        subProtocolManager=new StringManager(protocolStream+headerSize,size-headerSize);
+        subProtocolManager=new StringManager(protocolStream+tcpHeader.th_off*4,size-tcpHeader.th_off*4);
         setSubProtocolManager(subProtocolManager);
         delete subProtocolManager;
     }
@@ -527,7 +526,6 @@ public:
     TCPManager(u_int16_t sourcePort,u_int16_t destinationPort, u_int32_t sequenceNumber, u_int32_t acknowledgmentNumber, u_int8_t flags, ProtocolManager* subProtocolManager)
     {
         optionCount=0;
-        headerSize=sizeof(tcpHeader);
 
         memset(&tcpHeader,0,sizeof(libnet_tcp_hdr));
         memset(&ipv4Header,0,sizeof(libnet_tcp_hdr));
@@ -536,7 +534,8 @@ public:
         tcpHeader.th_seq=ntohl(sequenceNumber);
         tcpHeader.th_ack=ntohl(acknowledgmentNumber);
         tcpHeader.th_flags=flags;
-        ((u_int8_t*)&tcpHeader)[12]=5<<4;
+        tcpHeader.th_win=4;
+        tcpHeader.th_off=sizeof(tcpHeader)/4;
         setSubProtocolManager(subProtocolManager);
     }
 
@@ -575,7 +574,7 @@ public:
             }
             i++;
         }
-        for(;offset<headerSize;offset++)
+        for(;offset<tcpHeader.th_off*4;offset++)
         {
             buffer[offset]=0;
         }
@@ -583,7 +582,7 @@ public:
             ProtocolManager* subProtocolManager=getSubProtocolManager();
             if(subProtocolManager)
             {
-                subProtocolManager->getRawStream(buffer+headerSize,subProtocolManager->getRawStreamLength());
+                subProtocolManager->getRawStream(buffer+tcpHeader.th_off*4,subProtocolManager->getRawStreamLength());
             }
         }
         return 0;
@@ -595,9 +594,9 @@ public:
         ProtocolManager* subProtocolManager;
         subProtocolManager=getSubProtocolManager();
         if(subProtocolManager)
-            size = headerSize+subProtocolManager->getRawStreamLength();
+            size = tcpHeader.th_off*4+subProtocolManager->getRawStreamLength();
         else
-            size = headerSize;
+            size = tcpHeader.th_off*4;
         return size;
     }
 
@@ -944,7 +943,6 @@ public:
 class IPManager : public ProtocolManager
 {
 private:
-    u_int8_t version;
     libnet_ipv4_hdr ipv4Header;
 
     void setCheckSum()
@@ -977,7 +975,6 @@ private:
 public:
     IPManager(IPManager* origin)
     {
-        this->version=origin->version;
         this->ipv4Header=origin->ipv4Header;
         //TODO : ipv6
 
@@ -991,9 +988,8 @@ public:
     IPManager(u_int8_t* protocolStream, int size)
     {
         ProtocolManager* subProtocolManager;
-        version=0;
 
-        switch((protocolStream[0]&0xF0)>>4)
+        switch(((libnet_ipv4_hdr*)protocolStream)->ip_v)
         {
         case 4:
             if((protocolStream[0]&0x0F)*4<sizeof(libnet_ipv4_hdr) || size<sizeof(libnet_ipv4_hdr))
@@ -1001,7 +997,6 @@ public:
                 fprintf(stderr,"IPv4 size error");
                 return;
             }
-            version=4;
             ipv4Header=*(libnet_ipv4_hdr*)protocolStream;
             if(size<ntohs(ipv4Header.ip_len))
             {
@@ -1037,10 +1032,9 @@ public:
 
     IPManager(u_int8_t version, u_int8_t* sourceAddress,u_int8_t* destinationAddress,                           ProtocolManager* subProtocolManager)
     {
-        this->version=version;
         memset(&ipv4Header,0,sizeof(libnet_ipv4_hdr));
-        (*(u_int8_t*)&ipv4Header)|=4<<4;
-        (*(u_int8_t*)&ipv4Header)|=sizeof(libnet_ipv4_hdr)/4;
+        ipv4Header.ip_v=version;
+        ipv4Header.ip_hl=sizeof(libnet_ipv4_hdr)/4;
         ipv4Header.ip_ttl=64;
         setAddresss(sourceAddress,destinationAddress);
         setSubProtocolManager(subProtocolManager);
@@ -1048,10 +1042,9 @@ public:
 
     IPManager(u_int8_t version, u_int8_t* sourceAddress,u_int8_t* destinationAddress)
     {
-        this->version=version;
         memset(&ipv4Header,0,sizeof(libnet_ipv4_hdr));
-        (*(u_int8_t*)&ipv4Header)|=4<<4;
-        (*(u_int8_t*)&ipv4Header)|=sizeof(libnet_ipv4_hdr)/4;
+        ipv4Header.ip_v=version;
+        ipv4Header.ip_hl=sizeof(libnet_ipv4_hdr)/4;
         ipv4Header.ip_ttl=64;
         setAddresss(sourceAddress,destinationAddress);
         setSubProtocolManager(NULL);
@@ -1064,7 +1057,7 @@ public:
 
     void            setAddresss(u_int8_t* sourceAddress,u_int8_t* destinationAddress)
     {
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             memcpy(&ipv4Header.ip_src,sourceAddress,     4);
@@ -1079,7 +1072,7 @@ public:
     ProtocolManager*setSubProtocolManager(ProtocolManager* subProtocolManager)
     {
         char type[256]={0,};
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             subProtocolManager->getProtocolTypeAsString(type,200);
@@ -1116,7 +1109,7 @@ public:
 
     ProtocolManager*setSubProtocolManager(u_int32_t subProtocolType,ProtocolManager* subProtocolManager)
     {
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             if(subProtocolType < 256)
@@ -1160,7 +1153,7 @@ public:
 
     u_int32_t       getSubProtocolType()
     {
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             return ipv4Header.ip_p;
@@ -1173,7 +1166,7 @@ public:
     {
         if(size<getRawStreamLength())
             return getRawStreamLength();
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             memcpy(buffer,&ipv4Header,sizeof(libnet_ipv4_hdr));
@@ -1196,7 +1189,7 @@ public:
     {
         u_int32_t size;
         ProtocolManager* subProtocolManager;
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             subProtocolManager=getSubProtocolManager();
@@ -1216,7 +1209,7 @@ public:
 
     u_int8_t        getSourceAddressAsString        (char* buffer,u_int8_t size)
     {
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             return GetAddressAsString(buffer,size,(u_int8_t*)&ipv4Header.ip_src,sizeof(in_addr));
@@ -1228,7 +1221,7 @@ public:
 
     u_int8_t        getDestinationAddressAsString   (char* buffer,u_int8_t size)
     {
-        switch(version)
+        switch(ipv4Header.ip_v)
         {
         case 4:
             return GetAddressAsString(buffer,size,(u_int8_t*)&ipv4Header.ip_dst,sizeof(in_addr));
